@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -42,7 +46,21 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	contentType := header.Header.Get("Content-Type")
-	imageData, err := io.ReadAll(file)
+	mimeType, _, err := mime.ParseMediaType(contentType)
+	log.Printf("mimeType %s, %t", mimeType, mimeType == "image/png")
+	if err != nil {
+		log.Printf("Problem parsing media type with contentType %s", contentType)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+	if mimeType != "image/jpeg" && mimeType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Unsupported thumbnail type %s", mimeType), nil)
+		return
+	}
+
+	log.Printf("Content-Type: %s", mimeType)
+	//imageData, err := io.ReadAll(file)
+	//encodedImage := base64.StdEncoding.EncodeToString(imageData)
+	//dataURL := fmt.Sprintf("data:%s;base64,%s",  contentType, encodedImage)
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		log.Printf("could not retrieve video given id %s", videoIDString)
@@ -54,10 +72,29 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	videoThumbnails[video.ID] = thumbnail{data: imageData, mediaType: contentType}
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoIDString)
+	//thumbnailURL := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoIDString)
+	//video.ThumbnailURL = &thumbnailURL
+	//video.ThumbnailURL = &dataURL
+	imageType := strings.Split(contentType, "/")[1]
+	newFileName := fmt.Sprintf("%s.%s", videoIDString, imageType)
+	thumbnailFilePath := filepath.Join(cfg.assetsRoot, newFileName)
+	createdFile, err := os.Create(thumbnailFilePath)
+	if err != nil {
+		log.Printf("File creation failed with file path, %s", thumbnailFilePath)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	written, err := io.Copy(createdFile, file)
+	log.Printf("Wrote %d bytes", written)
+	if err != nil {
+		log.Printf("Somethign went wrong adding file, %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, newFileName)
+	//videoThumbnails[video.ID] = thumbnail{data:  written, mediaType: contentType}
+
 	video.ThumbnailURL = &thumbnailURL
 	cfg.db.UpdateVideo(video)
 	respondWithJSON(w, http.StatusOK, video)
 }
-
